@@ -1,0 +1,13 @@
+# {{ ansible_managed }}
+
+[Unit]
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/bash -c '/usr/bin/ovs-asap-setup {% for interface in _provider_networks.network_interface_mappings_list %}{{ interface.split(':')[1] }}{% endfor %}'
+
+[Install]
+WantedBy=multi-user.target

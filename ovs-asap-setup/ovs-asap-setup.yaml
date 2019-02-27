@@ -1,0 +1,56 @@
+---
+- name: Configure system for OVS hardware offloading
+  hosts: network_hosts
+  become: true
+
+  tasks:
+  - name: Create the neutron provider networks facts
+    provider_networks:
+      provider_networks: "{{ provider_networks }}"
+      bind_prefix: "{{ provider_network_bind_prefix | default('') }}"
+      is_metal: "{{ is_metal }}"
+      group_names: "{{ group_names }}"
+    register: pndata
+    when: neutron_provider_networks is not defined
+    tags:
+      - always
+
+  - name: Set provider network fact(s)
+    set_fact:
+      _provider_networks: "{{ neutron_provider_networks | default(pndata) }}"
+    tags:
+      - always
+
+  - name: Install networkd link file
+    copy:
+      src: 0--mlx5.conf
+      dest: /etc/systemd/network/0--mlx5.conf
+      owner: root
+      group: root
+      mode: 0644
+
+  - name: Install service
+    copy:
+      src: ovs-asap-setup
+      dest: /usr/bin/ovs-asap-setup
+      owner: root
+      group: root
+      mode: 0755
+
+  - name: Install systemd service file
+    template:
+      src: ovs-asap-setup.service.j2
+      dest: /etc/systemd/system/ovs-asap-setup.service
+
+  - name: Enable service
+    systemd:
+      name: ovs-asap-setup.service
+      enabled: yes
+
+  - name: Start service
+    service:
+      name: ovs-asap-setup.service
+      state: started
+
+  - name: Enable hardware offloading in OVS
+    command: "ovs-vsctl set Open_vSwitch . other_config:hw-offload=true"

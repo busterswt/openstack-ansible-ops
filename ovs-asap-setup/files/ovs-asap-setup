@@ -1,0 +1,109 @@
+#!/bin/sh
+# Copyright 2019, James Denton <james.denton@outlook.com>
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+get_vfs() {
+  if [ ! -d "/sys/class/net/$1" ]; then
+    echo "lsvf: interface $1 not found"
+    exit 2
+  fi
+
+  if [ -z "$2" ]; then
+    ls -ld /sys/class/net/"$1"/device/virt* | cut -f 11 -d ' ' | cut -b 4-
+  else
+    ls -ld /sys/class/net/"$1"/device/virtfn"$2" | cut -f 11 -d ' ' | cut -b 4-
+  fi
+}
+
+get_pci_addr() {
+  grep PCI_SLOT_NAME /sys/class/net/$1/device/uevent | sed 's:.*PCI_SLOT_NAME=::'
+}
+
+unbind_vf() {
+  echo $1 > /sys/bus/pci/drivers/mlx5_core/unbind
+}
+
+bind_vf() {
+  echo $1 > /sys/bus/pci/drivers/mlx5_core/bind
+}
+
+enable_switchdev() {
+  PCI_ADDR=`get_pci_addr $1`
+  devlink dev eswitch set pci/$PCI_ADDR mode switchdev
+}
+
+up_interface() {
+  ip link set $1 up
+}
+
+set_numvfs() {
+  echo 8 > /sys/class/net/$1/device/sriov_numvfs
+}
+
+set_tc_offload() {
+  ethtool -K $1 hw-tc-offload on
+}
+
+
+if [ -z "$1" ]; then
+echo "usage: ovs-asap-setup [pf0] [pf1] ... [pfN]"
+exit 1
+fi
+
+# Ensure the interface is UP
+for pf in "$@"; do
+  up_interface $pf
+done
+
+# Ensure VFs have been set
+for pf in "$@"; do
+  set_numvfs $pf
+done
+
+# Unbind the VFs individually
+for pf in "$@"; do
+  for vf in `get_vfs $pf`; do
+    echo Unbinding $vf...
+    unbind_vf $vf
+    if [ $? -ne 0 ] ; then
+      echo Device not found or already unbound from driver
+    fi
+  done
+done
+
+# Enable switchdev
+for pf in "$@"; do
+  echo Enabling switchdev on $pf
+  enable_switchdev $pf
+  if [ $? -ne 0 ] ; then
+    echo Unexpected error enabling switchdev on $pf
+  fi
+done
+
+# Enable hw offload
+for pf in "$@"; do
+  echo Enabling offload on $pf
+  set_tc_offload $pf
+done
+
+# Bind the VFs
+for pf in "$@"; do
+  for vf in `get_vfs $pf`; do
+    echo Binding $vf...
+    bind_vf $vf
+    if [ $? -ne 0 ] ; then
+      echo Unexpected error binding $vf to driver
+    fi
+  done
+done
